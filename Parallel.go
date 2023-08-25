@@ -57,7 +57,7 @@ func(par *Parallel[ReadT, OutT, ExpectT]) Await() []*Result[ReadT, OutT, ExpectT
 						roundCount,
 						stateIndex,
 						debugReader(state.reader),
-						state.result,
+						debugResult(state.result),
 					)
 				}
 				continue

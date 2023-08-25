@@ -104,8 +104,8 @@ func debugPacketListList[ReadT any](prepended [][]*Packet[ReadT]) string {
 
 func debugReader[ReadT any](reader *Reader[ReadT]) string {
 	return fmt.Sprintf(
-		"%08X (current = %s, prepended = %s, inPrepended = %d)",
-		reader,
+		"%d (current = %s, prepended = %s, inPrepended = %d)",
+		reader.id,
 		debugPacket(reader.current),
 		debugPacketListList(reader.prepended),
 		reader.inPrepended,

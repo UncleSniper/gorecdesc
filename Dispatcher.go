@@ -122,12 +122,13 @@ func(disp *Dispatcher[ReadT]) Subscribe() *Reader[ReadT] {
 	disp.nextCookie++
 	disp.mapLock.Unlock()
 	reader := &Reader[ReadT] {
+		id: NewReaderID(),
 		dispatcher: disp,
 		packetChannel: packetChannel,
 		ackChannel: ackChannel,
 	}
 	if debugOn {
-		debugf("[Dispatcher] Issuing new Reader %08X with cookie %d\n", reader, cookie)
+		debugf("[Dispatcher] Issuing new Reader %d with cookie %d\n", reader.id, cookie)
 	}
 	return reader
 }

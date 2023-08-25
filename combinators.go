@@ -13,7 +13,7 @@ func EmptySequence[ReadT any, OutT any, ExpectT any](returnValue OutT) Rule[Read
 		}
 		if debugOn {
 			debugf("Entering EmptySequence with Reader %s\n", debugReader(reader))
-			debugf("[EmptySequence with Reader %s] Issuing %s\n", debugResult(result))
+			debugf("[EmptySequence with Reader %s] Issuing %s\n", debugReader(reader), debugResult(result))
 			debugf("Leaving EmptySequence with Reader %s\n", debugReader(reader))
 		}
 		resultChannel <- result
@@ -290,7 +290,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 					debugf(
 						"Leaving Choice for structure '%s' with Reader %s\n",
 						structure,
-						positiveResults[0].Reader,
+						debugReader(positiveResults[0].Reader),
 					)
 				}
 				return
@@ -337,7 +337,11 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				}
 				resultChannel <- result
 				if debugOn {
-					debugf("Leaving Choice for structure '%s' with Reader %s\n", structure, result.Reader)
+					debugf(
+						"Leaving Choice for structure '%s' with Reader %s\n",
+						structure,
+						debugReader(result.Reader),
+					)
 				}
 				return
 		}

@@ -1,5 +1,9 @@
 package gorecdesc
 
+import (
+	"sync/atomic"
+)
+
 type PacketChannel[ReadT any] <-chan *Packet[ReadT]
 
 type Acknowledgement uint
@@ -13,12 +17,19 @@ const (
 type AckChannel chan<- Acknowledgement
 
 type Reader[ReadT any] struct {
+	id uint64
 	dispatcher *Dispatcher[ReadT]
 	packetChannel PacketChannel[ReadT]
 	ackChannel AckChannel
 	current *Packet[ReadT]
 	prepended [][]*Packet[ReadT]
 	inPrepended int
+}
+
+var readerID atomic.Uint64
+
+func NewReaderID() uint64 {
+	return readerID.Add(1)
 }
 
 func(reader *Reader[ReadT]) Current() *Packet[ReadT] {
@@ -159,43 +170,43 @@ func Intercept[ReadT any, OutT any, ExpectT any](
 	go func() {
 		for {
 			if debugOn {
-				debugf("[Intercept for Reader %08X] Awaiting ack on inner channel\n", reader)
+				debugf("[Intercept for Reader %d] Awaiting ack on inner channel\n", reader.id)
 			}
 			ack := <-newAckChannel
 			if debugOn {
-				debugf("[Intercept for Reader %08X] Received %s on inner channel\n", reader, debugAck(ack))
+				debugf("[Intercept for Reader %d] Received %s on inner channel\n", reader.id, debugAck(ack))
 			}
 			if ack != ACK_KEEP_SUBSCRIPTION {
 				if debugOn {
-					debugf("[Intercept for Reader %08X] Awaiting result on inner channel\n", reader)
+					debugf("[Intercept for Reader %d] Awaiting result on inner channel\n", reader.id)
 				}
 				result := <-nrc
 				if debugOn {
-					debugf("[Intercept for Reader %08X] Received %s on inner channel\n", reader, debugResult(result))
-					debugf("[Intercept for Reader %08X] Sending %s to outer channel\n", reader, debugAck(ack))
+					debugf("[Intercept for Reader %d] Received %s on inner channel\n", reader.id, debugResult(result))
+					debugf("[Intercept for Reader %d] Sending %s to outer channel\n", reader.id, debugAck(ack))
 				}
 				oldAckChannel <- ack
 				if interceptor != nil {
 					result = interceptor(ack, result)
 					if debugOn {
 						debugf(
-							"[Intercept for Reader %08X] Interceptor turned result into %s\n",
-							reader,
+							"[Intercept for Reader %d] Interceptor turned result into %s\n",
+							reader.id,
 							debugResult(result),
 						)
 					}
 				}
 				if debugOn {
-					debugf("[Intercept for Reader %08X] Sending result to outer channel\n", reader)
+					debugf("[Intercept for Reader %d] Sending result to outer channel\n", reader.id)
 				}
 				oldResultChannel <- result
 				if debugOn {
-					debugf("[Intercept for Reader %08X] Quitting\n", reader)
+					debugf("[Intercept for Reader %d] Quitting\n", reader.id)
 				}
 				break
 			}
 			if debugOn {
-				debugf("[Intercept for Reader %08X] Sending ACK_KEEP_SUBSCRIPTION to outer channel\n", reader)
+				debugf("[Intercept for Reader %d] Sending ACK_KEEP_SUBSCRIPTION to outer channel\n", reader.id)
 			}
 			oldAckChannel <- ACK_KEEP_SUBSCRIPTION
 			if interceptor != nil {
