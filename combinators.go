@@ -83,6 +83,13 @@ func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
 					)
 				}
 			}
+			if debugOn {
+				debugf(
+					"[Sequence with Reader %s] Changing Reader to %s\n",
+					debugReader(reader),
+					debugREader(childResult.Reader),
+				)
+			}
 			reader = childResult.Reader
 		}
 		result := &Result[ReadT, AccumulatorT, ExpectT] {
@@ -537,6 +544,13 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 				)
 			}
 			split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Changing Reader to %s\n",
+					debugReader(reader),
+					debugReader(itemResult.Reader),
+				)
+			}
 			reader = itemResult.Reader
 			if combineAccu != nil {
 				accumulator = combineAccu(accumulator, separatorValue, itemResult.Result)
@@ -630,7 +644,7 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 			separatorParallel.Add(split, EmptySequence[ReadT, SeparatorT, ExpectT](emptySeparator))
 			if debugOn {
 				debugf(
-					"[Repetition with Reader %s] Adding original reader to Parallel for separator\n",
+					"[Repetition with Reader %s] Adding original Reader to Parallel for separator\n",
 					debugReader(reader),
 				)
 			}
@@ -698,6 +712,11 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 					"[Repetition with Reader %s] Successfully read separator following item #%d\n",
 					debugReader(reader),
 					haveItemCount - 1,
+				)
+				debugf(
+					"[Repetition with Reader %s] Changing Reader to %s\n",
+					debugReader(reader),
+					debugReader(separatorResult.Reader),
 				)
 			}
 			reader = separatorResult.Reader
