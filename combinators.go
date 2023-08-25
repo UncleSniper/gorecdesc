@@ -1,16 +1,14 @@
 package gorecdesc
 
-func EmptySequence[ReadT any, OutT any, ExpectT any](
-	reader *Reader[ReadT],
-	resultChannel ResultChannel[ReadT, OutT, ExpectT],
-) {
-	var outValue OutT
-	result := &Result[ReadT, OutT, ExpectT] {
-		Offset: reader.current.Offset,
-		Result: outValue,
-		Reader: reader,
+func EmptySequence[ReadT any, OutT any, ExpectT any](returnValue OutT) Rule[ReadT, OutT, ExpectT] {
+	return func(reader *Reader[ReadT], resultChannel ResultChannel[ReadT, OutT, ExpectT]) {
+		result := &Result[ReadT, OutT, ExpectT] {
+			Offset: reader.current.Offset,
+			Result: returnValue,
+			Reader: reader,
+		}
+		resultChannel <- result
 	}
-	resultChannel <- result
 }
 
 func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
@@ -397,6 +395,7 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 		separatorConsumed := false
 		var separatorValue SeparatorT
 		var emptyItem ItemT
+		var emptySeparator SeparatorT
 		for {
 			if haveItemCount == maxItems {
 				break
@@ -404,7 +403,7 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 			offsetBefore := reader.Current().Offset
 			var itemParallel Parallel[ReadT, ItemT, ExpectT]
 			split := reader.Split()
-			itemParallel.Add(split, EmptySequence[ReadT, ItemT, ExpectT])
+			itemParallel.Add(split, EmptySequence[ReadT, ItemT, ExpectT](emptyItem))
 			itemParallel.Add(reader, itemRule)
 			itemResults := itemParallel.Await()
 			itemResult := itemResults[1]
@@ -454,7 +453,7 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 			// now we need to read a separator
 			var separatorParallel Parallel[ReadT, SeparatorT, ExpectT]
 			split = reader.Split()
-			separatorParallel.Add(split, EmptySequence[ReadT, SeparatorT, ExpectT])
+			separatorParallel.Add(split, EmptySequence[ReadT, SeparatorT, ExpectT](emptySeparator))
 			separatorParallel.Add(reader, separatorRule)
 			separatorResults := separatorParallel.Await()
 			separatorResult := separatorResults[1]
@@ -508,4 +507,31 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 		}
 		resultChannel <- result
 	}
+}
+
+func Option[ReadT any, OutT any, ExpectT any](
+	formatPacket func(*Packet[ReadT]) string,
+	none OutT,
+	subjectRule Rule[ReadT, OutT, ExpectT],
+) Rule[ReadT, OutT, ExpectT] {
+	if subjectRule == nil {
+		return EmptySequence[ReadT, OutT, ExpectT](none)
+	}
+	var noItem ExpectT
+	return Repetition(
+		formatPacket,
+		func() OutT {
+			return none
+		},
+		func(accumulator OutT, separator int, item OutT) OutT {
+			return item
+		},
+		noItem,
+		nil,
+		subjectRule,
+		nil,
+		0,
+		1,
+		false,
+	)
 }
