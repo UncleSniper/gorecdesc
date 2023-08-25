@@ -14,6 +14,7 @@ func EmptySequence[ReadT any, OutT any, ExpectT any](returnValue OutT) Rule[Read
 		if debugOn {
 			debugf("Entering EmptySequence with Reader %s\n", debugReader(reader))
 			debugf("[EmptySequence with Reader %s] Issuing %s\n", debugResult(result))
+			debugf("Leaving EmptySequence with Reader %s\n", debugReader(reader))
 		}
 		resultChannel <- result
 	}
@@ -75,6 +76,9 @@ func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
 					)
 				}
 				resultChannel <- outResult
+				if debugOn {
+					debugf("Leaving Sequence with Reader %s\n", debugReader(reader))
+				}
 				return
 			}
 			if combineAccu != nil {
@@ -105,6 +109,9 @@ func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
 			debugf("Leaving Sequence with Reader %s with result = %s\n", debugReader(reader), debugResult(result))
 		}
 		resultChannel <- result
+		if debugOn {
+			debugf("Leaving Sequence with Reader %s\n", debugReader(reader))
+		}
 	}
 }
 
@@ -182,6 +189,9 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				)
 			}
 			resultChannel <- result
+			if debugOn {
+				debugf("Leaving Choice for structure '%s' with Reader %s\n", structure, debugReader(reader))
+			}
 			return
 		}
 		if debugOn {
@@ -269,13 +279,20 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				// the reader of that result is the only one still live
 				if debugOn {
 					debugf(
-						"Leaving Choice with Reader %s with result %s of one true choice %d\n",
+						"[Choice with Reader %s] Issuing %s of one true choice %d\n",
 						debugReader(reader),
 						debugResult(positiveResults[0]),
 						maxPositiveIndex,
 					)
 				}
 				resultChannel <- positiveResults[0]
+				if debugOn {
+					debugf(
+						"Leaving Choice for structure '%s' with Reader %s\n",
+						structure,
+						positiveResults[0].Reader,
+					)
+				}
 				return
 			default:
 				// rule is ambiguous
@@ -319,6 +336,9 @@ func Choice[ReadT any, OutT any, ExpectT any](
 					)
 				}
 				resultChannel <- result
+				if debugOn {
+					debugf("Leaving Choice for structure '%s' with Reader %s\n", structure, result.Reader)
+				}
 				return
 		}
 		if len(negativeResults) == 1 {
@@ -331,6 +351,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				)
 			}
 			resultChannel <- negativeResults[0]
+			reader = negativeResults[0].Reader
 		} else {
 			errors := make([]ParseError[ReadT, ExpectT], len(negativeResults))
 			var expectations [][]ExpectT
@@ -365,6 +386,10 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				)
 			}
 			resultChannel <- result
+			reader = result.Reader
+		}
+		if debugOn {
+			debugf("Leaving Choice for structure '%s' with Reader %s\n", structure, debugReader(reader))
 		}
 	}
 }
