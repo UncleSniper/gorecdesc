@@ -87,6 +87,13 @@ func(reader *Reader[ReadT]) Acknowledge(unsubscribe Acknowledgement) {
 	}
 }
 
+func(reader *Reader[ReadT]) AcknowledgeOnChannel(unsubscribe Acknowledgement) {
+	if debugOn {
+		debugf("[Reader %s] Explicitly sending %s on channel\n", debugReader(reader), debugAck(unsubscribe))
+	}
+	reader.ackChannel <- unsubscribe
+}
+
 func(reader *Reader[ReadT]) Reprovide(packets []*Packet[ReadT], andCurrent bool) {
 	if len(packets) == 0 {
 		return

@@ -1,5 +1,18 @@
 package gorecdesc
 
+func EmptySequence[ReadT any, OutT any, ExpectT any](
+	reader *Reader[ReadT],
+	resultChannel ResultChannel[ReadT, OutT, ExpectT],
+) {
+	var outValue OutT
+	result := &Result[ReadT, OutT, ExpectT] {
+		Offset: reader.current.Offset,
+		Result: outValue,
+		Reader: reader,
+	}
+	resultChannel <- result
+}
+
 func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
 	initAccu InitAccu[AccumulatorT],
 	combineAccu CombineAccu[AccumulatorT, PieceT],
@@ -223,12 +236,12 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				}
 			case 1:
 				// there is a one true result; close short readers
-				for resultIndex, result := range positiveResults {
-					if result.Offset < maxPositiveOffset {
+				for resultIndex, result := range results {
+					if result.Error == nil && result.Offset < maxPositiveOffset {
 						if debugOn {
 							debugf(
 								"[Choice with Reader %s] One true result detected; issuing " +
-										"ACK_UNSUBSCRIBE_ON_SUCCESS to reader %s of positive result %d " +
+										"ACK_UNSUBSCRIBE_ON_SUCCESS to reader %s of result %d " +
 										"because its offset %d < maximum %d\n",
 								debugReader(reader),
 								debugReader(result.Reader),
@@ -237,7 +250,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 								maxPositiveOffset,
 							)
 						}
-						result.Reader.Acknowledge(ACK_UNSUBSCRIBE_ON_SUCCESS)
+						result.Reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 					}
 				}
 				// the reader of that result is the only one still live
@@ -253,14 +266,19 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				return
 			default:
 				// rule is ambiguous
-				ambChoices := make([]AmbiguityChoice[ReadT, ExpectT], len(positiveResults))
-				for resultIndex, result := range positiveResults {
-					_, childStructure := result.Error.CommisionAndStructure()
-					ambChoices[resultIndex] = AmbiguityChoice[ReadT, ExpectT] {
-						Structure: childStructure,
-						EndBefore: result.Reader.Current(),
+				var ambChoices []AmbiguityChoice[ReadT, ExpectT]
+				for _, result := range results {
+					if result.Error != nil {
+						continue
 					}
-					result.Reader.Acknowledge(ACK_UNSUBSCRIBE_ON_SUCCESS)
+					_, childStructure := result.Error.CommisionAndStructure()
+					if result.Offset == maxPositiveOffset {
+						ambChoices = append(ambChoices, AmbiguityChoice[ReadT, ExpectT] {
+							Structure: childStructure,
+							EndBefore: result.Reader.Current(),
+						})
+					}
+					result.Reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 				}
 				if debugOn {
 					debugf(
@@ -335,5 +353,159 @@ func Choice[ReadT any, OutT any, ExpectT any](
 			}
 			resultChannel <- result
 		}
+	}
+}
+
+func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT any](
+	formatPacket func(*Packet[ReadT]) string,
+	initAccu InitAccu[AccumulatorT],
+	combineAccu CombineBiAccu[AccumulatorT, SeparatorT, ItemT],
+	noItem ExpectT,
+	formatNoItem func(ExpectT) string,
+	itemRule Rule[ReadT, ItemT, ExpectT],
+	separatorRule Rule[ReadT, SeparatorT, ExpectT],
+	minItems uint64,
+	maxItems uint64,
+	allowTrailingSeparator bool,
+) Rule[ReadT, AccumulatorT, ExpectT] {
+	return func(reader *Reader[ReadT], resultChannel ResultChannel[ReadT, AccumulatorT, ExpectT]) {
+		if itemRule == nil {
+			reader.Acknowledge(ACK_UNSUBSCRIBE_ON_ERROR)
+			if formatNoItem == nil {
+				formatNoItem = func(ExpectT) string {
+					return "repetition of unspecified item"
+				}
+			}
+			current := reader.Current()
+			result := &Result[ReadT, AccumulatorT, ExpectT] {
+				Offset: current.Offset,
+				Error: &SyntaxError[ReadT, ExpectT] {
+					Found: current,
+					Expected: []ExpectT {noItem},
+					FormatExpected: formatNoItem,
+				},
+				Reader: reader,
+			}
+			resultChannel <- result
+			return
+		}
+		var accumulator AccumulatorT
+		if initAccu != nil {
+			accumulator = initAccu()
+		}
+		var haveItemCount uint64
+		separatorConsumed := false
+		var separatorValue SeparatorT
+		var emptyItem ItemT
+		for {
+			if haveItemCount == maxItems {
+				break
+			}
+			offsetBefore := reader.Current().Offset
+			var itemParallel Parallel[ReadT, ItemT, ExpectT]
+			split := reader.Split()
+			itemParallel.Add(split, EmptySequence[ReadT, ItemT, ExpectT])
+			itemParallel.Add(reader, itemRule)
+			itemResults := itemParallel.Await()
+			itemResult := itemResults[1]
+			if itemResult.Error != nil {
+				// we might actually get away with this
+				if haveItemCount >= minItems && (allowTrailingSeparator || !separatorConsumed) {
+					if haveItemCount > 0 && allowTrailingSeparator && separatorRule != nil && combineAccu != nil {
+						accumulator = combineAccu(accumulator, separatorValue, emptyItem)
+					}
+					outResult := SubstResult[ReadT, ItemT, AccumulatorT, ExpectT](itemResults[0], accumulator)
+					resultChannel <- outResult
+				} else {
+					// nope, the error has it
+					split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
+					errResult := SubstResult[ReadT, ItemT, AccumulatorT, ExpectT](itemResult, accumulator)
+					resultChannel <- errResult
+				}
+				return
+			}
+			// we successfully read an item
+			split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
+			reader = itemResult.Reader
+			if combineAccu != nil {
+				accumulator = combineAccu(accumulator, separatorValue, itemResult.Result)
+			}
+			haveItemCount++
+			if haveItemCount == maxItems && (!allowTrailingSeparator || separatorRule == nil) {
+				break
+			}
+			if separatorRule == nil {
+				if reader.Current().Offset == offsetBefore {
+					reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_ERROR)
+					errResult := &Result[ReadT, AccumulatorT, ExpectT] {
+						Offset: offsetBefore,
+						Result: accumulator,
+						Error: &InfiniteRepetitionError[ReadT, ExpectT] {
+							Found: reader.Current(),
+							FormatFound: formatPacket,
+						},
+						Reader: reader,
+					}
+					resultChannel <- errResult
+					return
+				}
+				continue
+			}
+			// now we need to read a separator
+			var separatorParallel Parallel[ReadT, SeparatorT, ExpectT]
+			split = reader.Split()
+			separatorParallel.Add(split, EmptySequence[ReadT, SeparatorT, ExpectT])
+			separatorParallel.Add(reader, separatorRule)
+			separatorResults := separatorParallel.Await()
+			separatorResult := separatorResults[1]
+			if separatorResult.Error != nil {
+				// we might actually get away with this
+				if haveItemCount == minItems {
+					outResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](
+						separatorResults[0],
+						accumulator,
+					)
+					resultChannel <- outResult
+				} else {
+					// nope, the error has it
+					split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
+					errResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](separatorResult, accumulator)
+					resultChannel <- errResult
+				}
+				return
+			}
+			// we successfully read a separator
+			reader = separatorResult.Reader
+			if reader.Current().Offset == offsetBefore {
+				reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_ERROR)
+				errResult := &Result[ReadT, AccumulatorT, ExpectT] {
+					Offset: offsetBefore,
+					Result: accumulator,
+					Error: &InfiniteRepetitionError[ReadT, ExpectT] {
+						Found: reader.Current(),
+						FormatFound: formatPacket,
+					},
+					Reader: reader,
+				}
+				resultChannel <- errResult
+				return
+			}
+			split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
+			separatorValue = separatorResult.Result
+			if haveItemCount == maxItems {
+				if combineAccu != nil {
+					accumulator = combineAccu(accumulator, separatorValue, emptyItem)
+				}
+				outResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](separatorResult, accumulator)
+				resultChannel <- outResult
+				return
+			}
+		}
+		result := &Result[ReadT, AccumulatorT, ExpectT] {
+			Offset: reader.Current().Offset,
+			Result: accumulator,
+			Reader: reader,
+		}
+		resultChannel <- result
 	}
 }

@@ -12,7 +12,28 @@ func The[T any](value T) InitAccu[T] {
 
 func BypassAccu[AccumulatorT any, PieceT any](sink func(PieceT)) CombineAccu[AccumulatorT, PieceT] {
 	return func(accumulator AccumulatorT, piece PieceT) AccumulatorT {
-		sink(piece)
+		if sink != nil {
+			sink(piece)
+		}
+		return accumulator
+	}
+}
+
+type CombineBiAccu[
+	AccumulatorT any,
+	LeftPieceT any,
+	RightPieceT any,
+] func(AccumulatorT, LeftPieceT, RightPieceT) AccumulatorT
+
+func BypassBiAccu[
+	AccumulatorT any,
+	LeftPieceT any,
+	RightPieceT any,
+](sink func(LeftPieceT, RightPieceT)) CombineBiAccu[AccumulatorT, LeftPieceT, RightPieceT] {
+	return func(accumulator AccumulatorT, left LeftPieceT, right RightPieceT) AccumulatorT {
+		if sink != nil {
+			sink(left, right)
+		}
 		return accumulator
 	}
 }

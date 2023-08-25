@@ -190,3 +190,7 @@ func(par *Parallel[ReadT, OutT, ExpectT]) Await() []*Result[ReadT, OutT, ExpectT
 		roundCount++
 	}
 }
+
+func(par *Parallel[ReadT, OutT, ExpectT]) Reset() {
+	par.states = nil
+}
