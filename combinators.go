@@ -1,5 +1,9 @@
 package gorecdesc
 
+import (
+	"fmt"
+)
+
 func EmptySequence[ReadT any, OutT any, ExpectT any](returnValue OutT) Rule[ReadT, OutT, ExpectT] {
 	return func(reader *Reader[ReadT], resultChannel ResultChannel[ReadT, OutT, ExpectT]) {
 		result := &Result[ReadT, OutT, ExpectT] {
@@ -129,7 +133,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 				split := reader.Split()
 				if debugOn {
 					debugf(
-						"[Choice with Reader %s] Adding split reader %s to Parallel for choice %d\n",
+						"[Choice with Reader %s] Adding split Reader %s to Parallel for choice %d\n",
 						debugReader(reader),
 						debugReader(split),
 						index,
@@ -171,7 +175,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 		}
 		if debugOn {
 			debugf(
-				"[Choice with Reader %s] Adding original reader to Parallel for choice %d\n",
+				"[Choice with Reader %s] Adding original Reader to Parallel for choice %d\n",
 				debugReader(reader),
 				lowestChoiceIndex,
 			)
@@ -239,7 +243,7 @@ func Choice[ReadT any, OutT any, ExpectT any](
 						if debugOn {
 							debugf(
 								"[Choice with Reader %s] One true result detected; issuing " +
-										"ACK_UNSUBSCRIBE_ON_SUCCESS to reader %s of result %d " +
+										"ACK_UNSUBSCRIBE_ON_SUCCESS to Reader %s of result %d " +
 										"because its offset %d < maximum %d\n",
 								debugReader(reader),
 								debugReader(result.Reader),
@@ -367,7 +371,16 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 	allowTrailingSeparator bool,
 ) Rule[ReadT, AccumulatorT, ExpectT] {
 	return func(reader *Reader[ReadT], resultChannel ResultChannel[ReadT, AccumulatorT, ExpectT]) {
+		if debugOn {
+			debugf("Entering Repetition with Reader %s\n", debugReader(reader))
+		}
 		if itemRule == nil {
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] No item rule provided, issuing ACK_UNSUBSCRIBE_ON_ERROR\n",
+					debugReader(reader),
+				)
+			}
 			reader.Acknowledge(ACK_UNSUBSCRIBE_ON_ERROR)
 			if formatNoItem == nil {
 				formatNoItem = func(ExpectT) string {
@@ -384,6 +397,13 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 				},
 				Reader: reader,
 			}
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] No item rule provided, issuing %s\n",
+					debugReader(reader),
+					debugResult(result),
+				)
+			}
 			resultChannel <- result
 			return
 		}
@@ -391,53 +411,176 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 		if initAccu != nil {
 			accumulator = initAccu()
 		}
+		if debugOn {
+			debugf("[Repetition with Reader %s] Initial accumulator = %+v\n", debugReader(reader), accumulator)
+		}
 		var haveItemCount uint64
 		separatorConsumed := false
 		var separatorValue SeparatorT
 		var emptyItem ItemT
 		var emptySeparator SeparatorT
 		for {
+			if debugOn {
+				debugf("[Repetition with Reader %s] Trying for item %d\n", debugReader(reader), haveItemCount)
+			}
 			if haveItemCount == maxItems {
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Hit max item count %d before reading item\n",
+						debugReader(reader),
+						maxItems,
+					)
+				}
 				break
 			}
-			offsetBefore := reader.Current().Offset
+			offsetBeforeItem := reader.Current().Offset
 			var itemParallel Parallel[ReadT, ItemT, ExpectT]
 			split := reader.Split()
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Adding split Reader %s to Parallel for no item\n",
+					debugReader(reader),
+					debugReader(split),
+				)
+			}
 			itemParallel.Add(split, EmptySequence[ReadT, ItemT, ExpectT](emptyItem))
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Adding original Reader to Parallel for item\n",
+					debugReader(reader),
+				)
+			}
 			itemParallel.Add(reader, itemRule)
 			itemResults := itemParallel.Await()
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Parallel.Await() for item returned results: %s\n",
+					debugReader(reader),
+					debugResultList(itemResults),
+				)
+			}
 			itemResult := itemResults[1]
 			if itemResult.Error != nil {
 				// we might actually get away with this
 				if haveItemCount >= minItems && (allowTrailingSeparator || !separatorConsumed) {
 					if haveItemCount > 0 && allowTrailingSeparator && separatorRule != nil && combineAccu != nil {
 						accumulator = combineAccu(accumulator, separatorValue, emptyItem)
+						if debugOn {
+							debugf(
+								"[Repetition with Reader %s] Updated accumulator to %+v\n",
+								debugReader(reader),
+								accumulator,
+							)
+						}
 					}
 					outResult := SubstResult[ReadT, ItemT, AccumulatorT, ExpectT](itemResults[0], accumulator)
+					if debugOn {
+						var reason string
+						if allowTrailingSeparator {
+							reason = "allowTrailingSeparator = true"
+						} else {
+							reason = "separatorConsumed = false"
+						}
+						debugf(
+							"[Repetition with Reader %s] Accepting failed item since " +
+									"haveItemCount %d >= minItems %d and %s\n",
+							debugReader(reader),
+							haveItemCount,
+							minItems,
+							reason,
+						)
+						debugf(
+							"[Repetition with Reader %s] Issuing result %s\n",
+							debugReader(reader),
+							debugResult(outResult),
+						)
+					}
 					resultChannel <- outResult
 				} else {
 					// nope, the error has it
+					if debugOn {
+						var reason string
+						if haveItemCount < minItems {
+							reason = fmt.Sprintf("haveItemCount %d < minItems %d", haveItemCount, minItems)
+						} else {
+							reason = "allowTrailingSeparator = false and separatorConsumed = true"
+						}
+						debugf(
+							"[Repetition with Reader %s] Rejecting failed item since %s, sending " +
+									"ACK_UNSUBSCRIBE_ON_SUCCESS on channel of split (empty sequence) Reader %s\n",
+							debugReader(reader),
+							reason,
+							debugReader(split),
+						)
+					}
 					split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 					errResult := SubstResult[ReadT, ItemT, AccumulatorT, ExpectT](itemResult, accumulator)
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Issuing result %s due to failed item\n",
+							debugReader(reader),
+							debugResult(errResult),
+						)
+					}
 					resultChannel <- errResult
 				}
 				return
 			}
 			// we successfully read an item
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Successfully read item #%d, sending " +
+							"ACK_UNSUBSCRIBE_ON_SUCCESS on channel of split (empty sequence) Reader %s\n",
+					debugReader(reader),
+					haveItemCount,
+					debugReader(split),
+				)
+			}
 			split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 			reader = itemResult.Reader
 			if combineAccu != nil {
 				accumulator = combineAccu(accumulator, separatorValue, itemResult.Result)
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Updated accumulator to %+v\n",
+						debugReader(reader),
+						accumulator,
+					)
+				}
 			}
 			haveItemCount++
+			separatorConsumed = false
 			if haveItemCount == maxItems && (!allowTrailingSeparator || separatorRule == nil) {
+				if debugOn {
+					var reason string
+					if !allowTrailingSeparator {
+						reason = "allowTrailingSeparator = false"
+					} else {
+						reason = "separatorRule == nil"
+					}
+					debugf(
+						"[Repetition with Reader %s] Stopping because haveItemCount == maxItems %d and %s",
+						debugReader(reader),
+						maxItems,
+						reason,
+					)
+				}
 				break
 			}
 			if separatorRule == nil {
-				if reader.Current().Offset == offsetBefore {
+				if reader.Current().Offset == offsetBeforeItem {
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Item rule did not consume any packets " +
+									"(still at packet %d) and no separator rule given: Issuing " +
+									"ACK_UNSUBSCRIBE_ON_ERROR \n",
+							debugReader(reader),
+							offsetBeforeItem,
+						)
+					}
 					reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_ERROR)
 					errResult := &Result[ReadT, AccumulatorT, ExpectT] {
-						Offset: offsetBefore,
+						Offset: offsetBeforeItem,
 						Result: accumulator,
 						Error: &InfiniteRepetitionError[ReadT, ExpectT] {
 							Found: reader.Current(),
@@ -445,40 +588,131 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 						},
 						Reader: reader,
 					}
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Item rule did not consume any packets " +
+									"(still at packet %d) and no separator rule given: Issuing %s\n",
+							debugReader(reader),
+							offsetBeforeItem,
+							debugResult(errResult),
+						)
+					}
 					resultChannel <- errResult
 					return
+				}
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Skipping reading separator after item %d: No rule given\n",
+						debugReader(reader),
+						haveItemCount - 1,
+					)
 				}
 				continue
 			}
 			// now we need to read a separator
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Trying for separator following item %d\n",
+					debugReader(reader),
+					haveItemCount - 1,
+				)
+			}
+			offsetBeforeSeparator := reader.Current().Offset
 			var separatorParallel Parallel[ReadT, SeparatorT, ExpectT]
 			split = reader.Split()
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Adding split Reader %s to Parallel for no separator\n",
+					debugReader(reader),
+					debugReader(split),
+				)
+			}
 			separatorParallel.Add(split, EmptySequence[ReadT, SeparatorT, ExpectT](emptySeparator))
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Adding original reader to Parallel for separator\n",
+					debugReader(reader),
+				)
+			}
 			separatorParallel.Add(reader, separatorRule)
 			separatorResults := separatorParallel.Await()
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Parallel.Await() for separator returned results: %s\n",
+					debugReader(reader),
+					debugResultList(separatorResults),
+				)
+			}
 			separatorResult := separatorResults[1]
 			if separatorResult.Error != nil {
 				// we might actually get away with this
-				if haveItemCount == minItems {
+				if haveItemCount >= minItems {
 					outResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](
 						separatorResults[0],
 						accumulator,
 					)
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Accepting failed separator since " +
+									"haveItemCount %d >= minItems %d\n",
+							debugReader(reader),
+							haveItemCount,
+							minItems,
+						)
+						debugf(
+							"[Repetition with Reader %s] Issuing result %s\n",
+							debugReader(reader),
+							debugResult(outResult),
+						)
+					}
 					resultChannel <- outResult
 				} else {
 					// nope, the error has it
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Rejecting failed separator since " +
+									"haveItemCount %d > minItems %d, sending ACK_UNSUBSCRIBE_ON_SUCCESS " +
+									"on channel of split (empty sequence) Reader %s\n",
+							debugReader(reader),
+							haveItemCount,
+							minItems,
+							debugReader(split),
+						)
+					}
 					split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 					errResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](separatorResult, accumulator)
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Issuing result %s\n",
+							debugReader(reader),
+							debugResult(errResult),
+						)
+					}
 					resultChannel <- errResult
 				}
 				return
 			}
 			// we successfully read a separator
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Successfully read separator following item #%d\n",
+					debugReader(reader),
+					haveItemCount - 1,
+				)
+			}
 			reader = separatorResult.Reader
-			if reader.Current().Offset == offsetBefore {
+			if reader.Current().Offset == offsetBeforeItem {
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Neither item role not separator rule consumed any packets " +
+								"(still at packet %d): Issuing ACK_UNSUBSCRIBE_ON_ERROR\n",
+						debugReader(reader),
+						offsetBeforeItem,
+					)
+				}
 				reader.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_ERROR)
 				errResult := &Result[ReadT, AccumulatorT, ExpectT] {
-					Offset: offsetBefore,
+					Offset: offsetBeforeItem,
 					Result: accumulator,
 					Error: &InfiniteRepetitionError[ReadT, ExpectT] {
 						Found: reader.Current(),
@@ -486,24 +720,73 @@ func Repetition[ReadT any, AccumulatorT any, ItemT any, SeparatorT any, ExpectT 
 					},
 					Reader: reader,
 				}
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Neither item role not separator rule consumed any packets " +
+								"(still at packet %d): Issuing %s\n",
+						debugReader(reader),
+						offsetBeforeItem,
+						debugResult(errResult),
+					)
+				}
 				resultChannel <- errResult
 				return
+			}
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Sending ACK_UNSUBSCRIBE_ON_SUCCESS on channel of split " +
+							"(empty sequence) Reader %s\n",
+					debugReader(reader),
+					debugReader(split),
+				)
 			}
 			split.AcknowledgeOnChannel(ACK_UNSUBSCRIBE_ON_SUCCESS)
 			separatorValue = separatorResult.Result
 			if haveItemCount == maxItems {
+				if debugOn {
+					debugf(
+						"[Repetition with Reader %s] Hit max item count %d after reading separator\n",
+						debugReader(reader),
+						maxItems,
+					)
+				}
 				if combineAccu != nil {
 					accumulator = combineAccu(accumulator, separatorValue, emptyItem)
+					if debugOn {
+						debugf(
+							"[Repetition with Reader %s] Updated accumulator to %+v\n",
+							debugReader(reader),
+							accumulator,
+						)
+					}
 				}
 				outResult := SubstResult[ReadT, SeparatorT, AccumulatorT, ExpectT](separatorResult, accumulator)
+				if debugOn {
+					debugf("[Repetition with Reader %s] Issuing %s\n", debugReader(reader), debugResult(outResult))
+				}
 				resultChannel <- outResult
 				return
+			}
+			separatorConsumed = reader.Current().Offset > offsetBeforeSeparator
+			if debugOn {
+				debugf(
+					"[Repetition with Reader %s] Setting separatorConsumed = %v after separator\n",
+					debugReader(reader),
+					separatorConsumed,
+				)
 			}
 		}
 		result := &Result[ReadT, AccumulatorT, ExpectT] {
 			Offset: reader.Current().Offset,
 			Result: accumulator,
 			Reader: reader,
+		}
+		if debugOn {
+			debugf(
+				"[Repetition with Reader %s] Stopped iterating; issuing %s\n",
+				debugReader(reader),
+				debugResult(result),
+			)
 		}
 		resultChannel <- result
 	}
