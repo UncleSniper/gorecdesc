@@ -866,3 +866,69 @@ func Option[ReadT any, OutT any, ExpectT any](
 		false,
 	)
 }
+
+func SingleToken[ReadT any, ExpectT any](
+	formatPacket func(*Packet[ReadT]) string,
+	expected ExpectT,
+	formatExpected func(ExpectT) string,
+	predicate func(*Packet[ReadT]) bool,
+) Rule[ReadT, *Packet[ReadT], ExpectT] {
+	return func(reader *Reader[ReadT], resultChannel ResultChannel[ReadT, *Packet[ReadT], ExpectT]) {
+		if debugOn {
+			debugf("Entering SingleToken with Reader %s\n", debugReader(reader))
+		}
+		current := reader.Current()
+		var result *Result[ReadT, *Packet[ReadT], ExpectT]
+		if predicate != nil && predicate(current) {
+			// match
+			if debugOn {
+				debugf(
+					"[SingleToken with Reader %s] Matched token, issuing ACK_KEEP_SUBSCRIPTION\n",
+					debugReader(reader),
+				)
+			}
+			reader.Acknowledge(ACK_KEEP_SUBSCRIPTION)
+			if debugOn {
+				debugf("[SingleToken with Reader %s] Matched token, retrieving next one\n", debugReader(reader))
+			}
+			reader.Next()
+			next := reader.Current()
+			result = &Result[ReadT, *Packet[ReadT], ExpectT] {
+				Offset: next.Offset,
+				Result: current,
+				Reader: reader,
+			}
+		} else {
+			// no match
+			if debugOn {
+				debugf(
+					"[SingleToken with Reader %s] Token not matched, issuing ACK_UNSUBSCRIBE_ON_ERROR\n",
+					debugReader(reader),
+				)
+			}
+			reader.Acknowledge(ACK_UNSUBSCRIBE_ON_ERROR)
+			if formatExpected == nil {
+				formatExpected = func(ExpectT) string {
+					return "<expected token not formattable>"
+				}
+			}
+			result = &Result[ReadT, *Packet[ReadT], ExpectT] {
+				Offset: current.Offset,
+				Error: &SyntaxError[ReadT, ExpectT] {
+					Found: current,
+					Expected: []ExpectT {expected},
+					FormatFound: formatPacket,
+					FormatExpected: formatExpected,
+				},
+				Reader: reader,
+			}
+		}
+		if debugOn {
+			debugf("[SingleToken with Reader %s] Issuing %s\n", debugReader(reader), debugResult(result))
+		}
+		resultChannel <- result
+		if debugOn {
+			debugf("Leaving SingleToken with Reader %s\n", debugReader(reader))
+		}
+	}
+}
