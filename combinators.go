@@ -11,6 +11,10 @@ func EmptySequence[ReadT any, OutT any, ExpectT any](returnValue OutT) Rule[Read
 			Result: returnValue,
 			Reader: reader,
 		}
+		if debugOn {
+			debugf("Entering EmptySequence with Reader %s\n", debugReader(reader))
+			debugf("[EmptySequence with Reader %s] Issuing %s\n", debugResult(result))
+		}
 		resultChannel <- result
 	}
 }
@@ -87,7 +91,7 @@ func Sequence[ReadT any, AccumulatorT any, PieceT any, ExpectT any](
 				debugf(
 					"[Sequence with Reader %s] Changing Reader to %s\n",
 					debugReader(reader),
-					debugREader(childResult.Reader),
+					debugReader(childResult.Reader),
 				)
 			}
 			reader = childResult.Reader
